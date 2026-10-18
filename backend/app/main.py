@@ -8,9 +8,18 @@ from sqlalchemy.orm import Session
 
 from .database import Base, engine, get_db
 from . import models
-from .schemas import JournalEntryCreate, JournalEntryResponse, JournalExtraction
+from .schemas import (
+    JournalEntryCreate,
+    JournalEntryResponse,
+    JournalExtraction,
+    GoalCreate,
+    GoalResponse,
+    TaskCreate,
+    TaskResponse,
+)
 from .extraction import extract_journal
-
+from .schemas import ProgressResponse
+from .progress import calculate_goal_progress
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -120,3 +129,154 @@ def extract_journal_entry(entry_id: int, db: DatabaseSession):
         raise
 
     return extraction
+
+@app.post("/goals", response_model=GoalResponse, status_code=201)
+def create_goal(goal: GoalCreate, db: DatabaseSession):
+    new_goal = models.Goal(
+        title=goal.title.strip(),
+        description=goal.description,
+        target_date=goal.target_date,
+        status="active",
+    )
+
+    if not new_goal.title:
+        raise HTTPException(
+            status_code=422,
+            detail="Goal title cannot be empty",
+        )
+
+    db.add(new_goal)
+    db.commit()
+    db.refresh(new_goal)
+    return new_goal
+
+
+@app.get("/goals", response_model=list[GoalResponse])
+def list_goals(db: DatabaseSession):
+    statement = select(models.Goal).order_by(models.Goal.id.desc())
+    return db.scalars(statement).all()
+
+
+@app.get("/goals/{goal_id}", response_model=GoalResponse)
+def get_goal(goal_id: int, db: DatabaseSession):
+    goal = db.get(models.Goal, goal_id)
+
+    if goal is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Goal not found",
+        )
+
+    return goal
+
+
+@app.post(
+    "/goals/{goal_id}/tasks",
+    response_model=TaskResponse,
+    status_code=201,
+)
+def create_task(
+    goal_id: int,
+    task: TaskCreate,
+    db: DatabaseSession,
+):
+    goal = db.get(models.Goal, goal_id)
+
+    if goal is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Goal not found",
+        )
+
+    title = task.title.strip()
+
+    if not title:
+        raise HTTPException(
+            status_code=422,
+            detail="Task title cannot be empty",
+        )
+
+    new_task = models.Task(
+        goal_id=goal_id,
+        title=title,
+        completed=False,
+    )
+
+    db.add(new_task)
+    db.commit()
+    db.refresh(new_task)
+
+    return new_task
+
+
+@app.get(
+    "/goals/{goal_id}/tasks",
+    response_model=list[TaskResponse],
+)
+def list_tasks(goal_id: int, db: DatabaseSession):
+    goal = db.get(models.Goal, goal_id)
+
+    if goal is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Goal not found",
+        )
+
+    statement = (
+        select(models.Task)
+        .where(models.Task.goal_id == goal_id)
+        .order_by(models.Task.id.asc())
+    )
+
+    return db.scalars(statement).all()
+
+
+@app.patch("/tasks/{task_id}/complete", response_model=TaskResponse)
+def complete_task(task_id: int, db: DatabaseSession):
+    task = db.get(models.Task, task_id)
+
+    if task is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Task not found",
+        )
+
+    task.completed = True
+
+    db.commit()
+    db.refresh(task)
+
+    return task
+
+
+@app.post(
+    "/goals/{goal_id}/progress",
+    response_model=ProgressResponse,
+    status_code=201,
+)
+def create_progress_snapshot(
+    goal_id: int,
+    db: DatabaseSession,
+):
+    goal = db.get(models.Goal, goal_id)
+
+    if goal is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Goal not found",
+        )
+
+    progress_data = calculate_goal_progress(db, goal_id)
+
+    snapshot = models.Progress(
+        goal_id=goal_id,
+        completed_tasks=progress_data["completed_tasks"],
+        total_tasks=progress_data["total_tasks"],
+        percentage=progress_data["percentage"],
+    )
+
+    db.add(snapshot)
+    db.commit()
+    db.refresh(snapshot)
+
+    return snapshot
