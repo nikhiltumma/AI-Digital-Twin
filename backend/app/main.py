@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from .database import Base, engine, get_db
 from . import models
+from .planning import generate_plan
 
 from .schemas import (
     JournalEntryCreate,
@@ -501,3 +502,151 @@ def list_goal_documents(
     documents = db.scalars(statement).all()
 
     return documents
+
+
+
+@app.post(
+    "/goals/{goal_id}/generate-plan",
+    status_code=201,
+)
+def create_ai_plan(
+    goal_id: int,
+    db: DatabaseSession,
+):
+    # 1. Fetch the goal
+    goal = db.get(models.Goal, goal_id)
+
+    if goal is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Goal not found",
+        )
+
+    # 2. Prepare goal information
+    goal_data = {
+        "domain": goal.domain,
+        "title": goal.title,
+        "description": goal.description,
+        "current_state": goal.current_state,
+        "target_state": goal.target_state,
+        "timeline_value": goal.timeline_value,
+        "timeline_unit": goal.timeline_unit,
+        "resources": goal.resources,
+    }
+
+    # 3. Generate AI plan
+    try:
+        generated_plan = generate_plan(goal_data)
+
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=str(exc),
+        ) from exc
+
+    # 4. Validate and extract activities
+    milestones = generated_plan.get("milestones", [])
+
+    if not isinstance(milestones, list):
+        raise HTTPException(
+            status_code=502,
+            detail="Invalid milestones returned by AI",
+        )
+
+    task_titles = []
+
+    for milestone in milestones:
+        if not isinstance(milestone, dict):
+            continue
+
+        weekly_targets = milestone.get("weekly_targets", [])
+
+        if not isinstance(weekly_targets, list):
+            continue
+
+        for weekly_target in weekly_targets:
+            if not isinstance(weekly_target, dict):
+                continue
+
+            week = weekly_target.get("week", "")
+            tasks = weekly_target.get("tasks", [])
+
+            if not isinstance(tasks, list):
+                continue
+
+            for task_title in tasks:
+                if not isinstance(task_title, str) or not task_title.strip():
+                    continue
+
+                formatted_title = (
+                    f"Month {milestone.get('month', '?')} "
+                    f"- Week {week}: {task_title.strip()}"
+                )
+
+                task_titles.append(formatted_title)
+
+    if not task_titles:
+        raise HTTPException(
+            status_code=502,
+            detail="AI generated no valid tasks",
+        )
+
+    # 5. Create plan and task records
+    new_plan = models.Plan(
+        goal_id=goal_id,
+        summary=generated_plan["summary"],
+        plan_data=generated_plan,
+        version=1,
+    )
+
+    try:
+        db.add(new_plan)
+
+        for title in task_titles:
+            new_task = models.Task(
+                goal_id=goal_id,
+                title=title,
+                completed=False,
+            )
+            db.add(new_task)
+
+        db.commit()
+        db.refresh(new_plan)
+
+    except Exception:
+        db.rollback()
+        raise
+
+    # 6. Return response
+    return {
+        "message": "AI plan and tasks generated successfully",
+        "plan_id": new_plan.id,
+        "goal_id": goal_id,
+        "summary": new_plan.summary,
+        "total_tasks_created": len(task_titles),
+        "plan": new_plan.plan_data,
+    }
+
+
+@app.get("/goals/{goal_id}/plans")
+def list_goal_plans(
+    goal_id: int,
+    db: DatabaseSession,
+):
+    goal = db.get(models.Goal, goal_id)
+
+    if goal is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Goal not found",
+        )
+
+    statement = (
+        select(models.Plan)
+        .where(models.Plan.goal_id == goal_id)
+        .order_by(models.Plan.created_at.desc())
+    )
+
+    plans = db.scalars(statement).all()
+
+    return plans
