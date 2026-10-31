@@ -70,28 +70,51 @@ class JournalExtractionRecord(Base):
     )
 
 
+
 class Goal(Base):
     __tablename__ = "goals"
 
     id: Mapped[int] = mapped_column(
-        Integer,
-        primary_key=True,
-        index=True,
+        Integer, primary_key=True, index=True
     )
 
     title: Mapped[str] = mapped_column(
-        String(200),
+        String(200), nullable=False
+    )
+
+    domain: Mapped[str] = mapped_column(
+        String(50),
+        default="general",
+        server_default="general",
         nullable=False,
     )
 
     description: Mapped[str | None] = mapped_column(
-        Text,
-        nullable=True,
+        Text, nullable=True
+    )
+
+    current_state: Mapped[str | None] = mapped_column(
+        Text, nullable=True
+    )
+
+    target_state: Mapped[str | None] = mapped_column(
+        Text, nullable=True
+    )
+
+    timeline_value: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
+
+    timeline_unit: Mapped[str | None] = mapped_column(
+        String(20), nullable=True
+    )
+
+    resources: Mapped[str | None] = mapped_column(
+        Text, nullable=True
     )
 
     target_date: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True),
-        nullable=True,
+        DateTime(timezone=True), nullable=True
     )
 
     status: Mapped[str] = mapped_column(
@@ -101,6 +124,48 @@ class Goal(Base):
     )
 
     created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+    
+class GoalDocument(Base):
+    __tablename__ = "goal_documents"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        index=True,
+    )
+
+    goal_id: Mapped[int] = mapped_column(
+        ForeignKey("goals.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    file_name: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+    )
+
+    file_type: Mapped[str] = mapped_column(
+        String(100),
+        nullable=False,
+    )
+
+    file_size: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+    )
+
+    storage_path: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+    )
+
+    uploaded_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
         nullable=False,
